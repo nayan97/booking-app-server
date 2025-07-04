@@ -1,12 +1,14 @@
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
+const Stripe = require("stripe");
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 dotenv.config();
 
 const app = express();
+const stripe = Stripe(process.env.PAYMENT_STRIPE_KEY);
 const port = process.env.PORT || 3000;
 
 app.use(cors());
@@ -29,6 +31,76 @@ async function run() {
     await client.connect();
 
     const parcelsCollection = client.db("fastMover").collection("parcels");
+    const paymentsCollection = client.db("fastMover").collection("payments");
+    
+
+    //stripe apis
+    app.post('/api/create-payment-intent', async (req, res) => {
+      const amounts = req.body.amount
+  try {
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: amounts, // amount in cents
+      currency: 'usd',
+    });
+    res.json({ clientSecret: paymentIntent.client_secret });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+//payments apis
+app.post("/api/payment-success", async (req, res) => {
+  const { parcelId, amount, user, transactionId, paymentMethod } = req.body;
+
+  if (!parcelId || !user || !amount) {
+    return res.status(400).json({ message: "Missing required fields" });
+  }
+
+  try {
+    // 1️⃣ Update parcel paymentStatus to "paid"
+    const updateResult = await parcelsCollection.updateOne(
+      { _id: new ObjectId(parcelId) },
+      { $set: { paymentStatus: "paid" } }
+    );
+
+    // 2️⃣ Insert into payment history
+    const payment = {
+      parcelId: new ObjectId(parcelId),
+      user, // { uid, name, email }
+      amount,
+      transactionId,
+      paymentMethod, // Optional
+      createdAt: new Date().toISOString(),
+    };
+
+    await paymentsCollection.insertOne(payment);
+
+    res.status(200).json({ message: "Payment recorded and parcel updated." });
+  } catch (error) {
+    console.error("Payment success handling error:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+// payment History
+
+app.get("/api/payments", async (req, res) => {
+  const { email } = req.query;
+
+  try {
+    const filter = email ? { "user.email": email } : {};
+    const payments = await paymentsCollection
+      .find(filter)
+      .sort({ createdAt: -1 }) // Descending
+      .toArray();
+
+    res.status(200).json(payments);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to load payment history" });
+  }
+});
+
+
 
     // parcels apis
 
