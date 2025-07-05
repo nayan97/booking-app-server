@@ -30,77 +30,102 @@ async function run() {
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
 
+    const usersCollection = client.db("fastMover").collection("users");
     const parcelsCollection = client.db("fastMover").collection("parcels");
     const paymentsCollection = client.db("fastMover").collection("payments");
-    
+
+    //users apis
+app.post("/api/users", async (req, res) => {
+  const userProfile = req.body;
+  const userEmail = userProfile.email; 
+
+  try {
+    // Check if user already exists by email
+    const existingUser = await usersCollection.findOne({
+      email: userEmail,
+    });
+
+    if (existingUser) {
+      return res.status(409).send({ message: "User already exists" });
+    }
+
+    // Insert new user if not exists
+    const result = await usersCollection.insertOne(userProfile);
+    res.status(201).send(result);
+  } catch (error) {
+    console.error("❌ Error inserting user:", error);
+    res.status(500).send({ error: "Internal Server Error" });
+  }
+});
+
 
     //stripe apis
-    app.post('/api/create-payment-intent', async (req, res) => {
-      const amounts = req.body.amount
-  try {
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: amounts, // amount in cents
-      currency: 'usd',
+    app.post("/api/create-payment-intent", async (req, res) => {
+      const amounts = req.body.amount;
+      try {
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: amounts, // amount in cents
+          currency: "usd",
+        });
+        res.json({ clientSecret: paymentIntent.client_secret });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
     });
-    res.json({ clientSecret: paymentIntent.client_secret });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
 
-//payments apis
-app.post("/api/payment-success", async (req, res) => {
-  const { parcelId, amount, user, transactionId, paymentMethod } = req.body;
+    //payments apis
+    app.post("/api/payment-success", async (req, res) => {
+      const { parcelId, amount, user, transactionId, paymentMethod } = req.body;
 
-  if (!parcelId || !user || !amount) {
-    return res.status(400).json({ message: "Missing required fields" });
-  }
+      if (!parcelId || !user || !amount) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
 
-  try {
-    // 1️⃣ Update parcel paymentStatus to "paid"
-    const updateResult = await parcelsCollection.updateOne(
-      { _id: new ObjectId(parcelId) },
-      { $set: { paymentStatus: "paid" } }
-    );
+      try {
+        // 1️⃣ Update parcel paymentStatus to "paid"
+        const updateResult = await parcelsCollection.updateOne(
+          { _id: new ObjectId(parcelId) },
+          { $set: { paymentStatus: "paid" } }
+        );
 
-    // 2️⃣ Insert into payment history
-    const payment = {
-      parcelId: new ObjectId(parcelId),
-      user, // { uid, name, email }
-      amount,
-      transactionId,
-      paymentMethod, // Optional
-      createdAt: new Date().toISOString(),
-    };
+        // 2️⃣ Insert into payment history
+        const payment = {
+          parcelId: new ObjectId(parcelId),
+          user, // { uid, name, email }
+          amount,
+          transactionId,
+          paymentMethod, // Optional
+          createdAt: new Date().toISOString(),
+        };
 
-    await paymentsCollection.insertOne(payment);
+        await paymentsCollection.insertOne(payment);
 
-    res.status(200).json({ message: "Payment recorded and parcel updated." });
-  } catch (error) {
-    console.error("Payment success handling error:", error);
-    res.status(500).json({ message: "Server error" });
-  }
-});
+        res
+          .status(200)
+          .json({ message: "Payment recorded and parcel updated." });
+      } catch (error) {
+        console.error("Payment success handling error:", error);
+        res.status(500).json({ message: "Server error" });
+      }
+    });
 
-// payment History
+    // payment History
 
-app.get("/api/payments", async (req, res) => {
-  const { email } = req.query;
+    app.get("/api/payments", async (req, res) => {
+      const { email } = req.query;
 
-  try {
-    const filter = email ? { "user.email": email } : {};
-    const payments = await paymentsCollection
-      .find(filter)
-      .sort({ createdAt: -1 }) // Descending
-      .toArray();
+      try {
+        const filter = email ? { "user.email": email } : {};
+        const payments = await paymentsCollection
+          .find(filter)
+          .sort({ createdAt: -1 }) // Descending
+          .toArray();
 
-    res.status(200).json(payments);
-  } catch (error) {
-    res.status(500).json({ message: "Failed to load payment history" });
-  }
-});
-
-
+        res.status(200).json(payments);
+      } catch (error) {
+        res.status(500).json({ message: "Failed to load payment history" });
+      }
+    });
 
     // parcels apis
 
@@ -125,26 +150,28 @@ app.get("/api/payments", async (req, res) => {
 
     // get parcel by id
 
-app.get("/api/parcels/:id", async (req, res) => {
-  const { id } = req.params;
+    app.get("/api/parcels/:id", async (req, res) => {
+      const { id } = req.params;
 
-  if (!ObjectId.isValid(id)) {
-    return res.status(400).json({ message: "Invalid parcel ID" });
-  }
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "Invalid parcel ID" });
+      }
 
-  try {
-    const parcel = await parcelsCollection.findOne({ _id: new ObjectId(id) });
+      try {
+        const parcel = await parcelsCollection.findOne({
+          _id: new ObjectId(id),
+        });
 
-    if (!parcel) {
-      return res.status(404).json({ message: "Parcel not found" });
-    }
+        if (!parcel) {
+          return res.status(404).json({ message: "Parcel not found" });
+        }
 
-    res.status(200).json(parcel);
-  } catch (error) {
-    console.error("Error fetching parcel:", error);
-    res.status(500).json({ message: "Failed to fetch parcel" });
-  }
-});
+        res.status(200).json(parcel);
+      } catch (error) {
+        console.error("Error fetching parcel:", error);
+        res.status(500).json({ message: "Failed to fetch parcel" });
+      }
+    });
 
     // parcels post api
     app.post("/api/parcels", async (req, res) => {
@@ -164,7 +191,6 @@ app.get("/api/parcels/:id", async (req, res) => {
     });
 
     // parcel delete api
-  
 
     app.delete("/api/parcels/:id", async (req, res) => {
       const id = req.params.id;
